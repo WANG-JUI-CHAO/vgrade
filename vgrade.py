@@ -193,6 +193,7 @@ class Grader:
         self._rule_used: dict[tuple[str, str], float] = defaultdict(float)
         self.na: dict[str, str] = {}
         self.stats: dict = {}
+        self.sources: list[tuple[str, str]] = []    # (顯示名稱, 原始碼)
 
     def add(self, cat: str, sev: str, msg: str, sugg: str = "", file: str = "", line: int = 0,
             penalty: float = 0.0, rule: str | None = None, cap: float | None = None) -> None:
@@ -1103,6 +1104,7 @@ def grade(paths: list[Path], top: str | None, target: str, budget: int | None,
         top = max(tops or design, key=lambda m: m.end - m.start).name
     g.stats["top"] = top
     g.stats["files"] = [s.display for s in sources]
+    g.sources = [(s.display, s.raw) for s in sources]
 
     for s in sources:
         check_style(g, s, [m for m in all_mods if m.src is s], max_line)
@@ -1219,6 +1221,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-levels", type=int, help="邏輯深度建議上限（預設 fpga 8 / asic 24）")
     ap.add_argument("--max-line", type=int, default=100, help="單行長度上限（預設 100）")
     ap.add_argument("--json", type=Path, metavar="FILE", help="另外輸出 JSON 報告")
+    ap.add_argument("--html", type=Path, metavar="FILE", help="另外輸出 HTML 評分報告")
+    ap.add_argument("--open", action="store_true", help="產生 HTML 報告後用瀏覽器開啟")
     ap.add_argument("--no-info", action="store_true", help="不顯示「建議」等級的項目")
     ap.add_argument("--version", action="version", version=f"vgrade {__version__}")
     args = ap.parse_args(argv)
@@ -1237,6 +1241,13 @@ def main(argv: list[str] | None = None) -> int:
             "issues": [asdict(i) for i in g.issues],
         }
         args.json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if args.html:
+        from report_html import render_html
+        args.html.write_text(render_html(g, top, __version__), encoding="utf-8")
+        print(f"HTML 報告：{args.html.resolve()}")
+        if args.open:
+            import webbrowser
+            webbrowser.open(args.html.resolve().as_uri())
     return 0
 
 

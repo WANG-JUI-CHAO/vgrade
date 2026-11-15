@@ -154,6 +154,17 @@ class TestSynthesis(unittest.TestCase):
         for expected in ("latch：tmp", "latch：flag", "unused_cnt", "div", "輸出 'r'", "gated"):
             self.assertIn(expected, text)
 
+    def test_html_report(self):
+        from report_html import render_html
+        g, top = vgrade.grade([EXAMPLES / "bad_design.v"], None, "fpga", None)
+        page = render_html(g, top, vgrade.__version__)
+        self.assertIn("<title>vgrade 評分報告 · BadDesign</title>", page)
+        self.assertIn('id="L-0-17"', page)                 # 原始碼行錨點
+        self.assertIn('href="#L-0-17"', page)              # 問題清單連到原始碼
+        self.assertIn("&lt;=", page)                       # 原始碼有被跳脫
+        self.assertNotIn("<= b", page)
+        self.assertEqual(page.count('<tr data-sev='), len(g.issues))
+
     def test_combinational_design_pipeline_na(self):
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / "add.v"

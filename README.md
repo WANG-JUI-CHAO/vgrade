@@ -30,6 +30,19 @@
  ...
 ```
 
+### HTML 評分報告
+
+加上 `--html report.html` 會另外產生一份**單一檔案、離線可用**的評分報告，可以直接傳給同學、助教，或列印成 PDF：
+
+![HTML 評分報告預覽](docs/report_preview.png)
+
+- 總分、等級與六個類別的分數長條
+- 設計統計：暫存器、latch、邏輯數量、最長深度、輸出延遲
+- Pipeline 各級深度圖與各類路徑深度圖（含建議上限線，滑鼠移上去可看數值）
+- 可依嚴重度、類別篩選的問題清單，點位置直接跳到原始碼
+- 原始碼標註：有問題的行標色，說明就寫在該行下方
+- 支援深色模式與手機瀏覽
+
 ## 評分項目
 
 | 類別 | 權重 | 檢查內容 | 方法 |
@@ -71,6 +84,7 @@ python vgrade.py design.v --target asic          # 以 ASIC 邏輯閘級數評�
 python vgrade.py design.v --max-levels 6         # 自訂邏輯深度上限
 python vgrade.py design.v --no-info              # 只顯示錯誤與警告
 python vgrade.py design.v --json report.json     # 輸出 JSON（方便批次改作業、做統計）
+python vgrade.py design.v --html report.html --open   # 產生 HTML 評分報告並用瀏覽器開啟
 ```
 
 testbench module（名稱以 `tb`/`test` 開頭、`_tb` 結尾，或無 port 且有 `initial`）會自動略過。
@@ -95,7 +109,8 @@ python -m unittest discover -s tests -v
 
 ## Roadmap
 
-- [ ] HTML 報告（含路徑圖）
+- [x] HTML 評分報告
+- [ ] 在報告中畫出關鍵路徑經過的訊號
 - [ ] 批次模式：一次評整個資料夾、輸出成績 CSV
 - [ ] 設定檔（自訂權重、關閉規則）
 - [ ] 整合 [verilog-tbgen](https://github.com/WANG-JUI-CHAO/verilog-tbgen)，加入功能正確性分數
