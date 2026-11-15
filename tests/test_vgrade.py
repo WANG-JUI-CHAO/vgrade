@@ -127,6 +127,25 @@ endmodule""")
         self.assertEqual(rules(g, "coding"), "")
 
 
+class TestGradeLetter(unittest.TestCase):
+    def test_error_caps_grade_at_c(self):
+        self.assertEqual(vgrade.grade_letter(95), "A")
+        self.assertEqual(vgrade.grade_letter(95, has_error=True), "C")
+        self.assertEqual(vgrade.grade_letter(85, has_error=True), "C")
+        self.assertEqual(vgrade.grade_letter(65, has_error=True), "D")
+
+    def test_severity_penalty(self):
+        g = vgrade.Grader()
+        g.add("coding", "error", "e1")
+        g.add("coding", "warning", "w1")
+        g.add("style", "info", "i1")
+        self.assertEqual(g.severity_penalty(), 5)
+        self.assertEqual(g.total(), 95)
+        for k in range(20):
+            g.add("coding", "error", f"e{k + 2}")
+        self.assertEqual(g.severity_penalty(), vgrade.SEVERITY_CAP)
+
+
 class TestControlNames(unittest.TestCase):
     def test_control_detection(self):
         for n in ("out_valid", "state", "cnt", "rd_ptr", "busy", "u0.s1_valid"):

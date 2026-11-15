@@ -26,7 +26,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # 類別代號 -> (顯示名稱, 權重)
 CATEGORIES = {
@@ -207,7 +207,8 @@ class Grader:
     def scores(self) -> dict[str, float | None]:
         return {c: None if c in self.na else max(0.0, 100.0 - self.penalty[c]) for c in CATEGORIES}
 
-    def total(self) -> float:
+    def weighted(self) -> float:
+        """各類別分數的加權平均。"""
         num = den = 0.0
         for c, s in self.scores().items():
             if s is not None:
@@ -216,10 +217,31 @@ class Grader:
                 den += w
         return num / den if den else 0.0
 
+    def severity_penalty(self) -> float:
+        """嚴重度額外扣分：每個錯誤 -4、每個警告 -1（上限 30），避免問題被類別權重稀釋。"""
+        n_err = sum(1 for i in self.issues if i.severity == "error")
+        n_warn = sum(1 for i in self.issues if i.severity == "warning")
+        return float(min(SEVERITY_CAP, n_err * SEVERITY_PENALTY["error"] + n_warn * SEVERITY_PENALTY["warning"]))
 
-def grade_letter(score: float) -> str:
+    def total(self) -> float:
+        return max(0.0, self.weighted() - self.severity_penalty())
+
+    def letter(self) -> str:
+        """有「錯誤」等級的問題時，等級最高為 C（有真正 bug 的設計不該拿到 A/B）。"""
+        return grade_letter(self.total(), any(i.severity == "error" for i in self.issues))
+
+
+SEVERITY_PENALTY = {"error": 4, "warning": 1}
+SEVERITY_CAP = 30
+ERROR_GRADE_CAP = "C"
+
+
+def grade_letter(score: float, has_error: bool = False) -> str:
+    order = "ABCDF"
     for th, g in ((90, "A"), (80, "B"), (70, "C"), (60, "D")):
         if score >= th:
+            if has_error and order.index(g) < order.index(ERROR_GRADE_CAP):
+                return ERROR_GRADE_CAP
             return g
     return "F"
 
@@ -464,15 +486,15 @@ def check_style(g: Grader, src: Source, mods: list[ModuleInfo], max_line: int) -
                   f, src.line(mod.start), 2, rule="non_ansi")
         if not re.fullmatch(r"[a-z][a-z0-9_]*", mod.name):
             g.add("style", "info", f"module 名稱 '{mod.name}' 不是 snake_case",
-                  "module 與訊號建議使用小寫加底線，例如 gcd_core", f, src.line(mod.start), 1,
-                  rule="naming", cap=6)
+                  "module 與訊號建議使用小寫加底線，例如 gcd_core", f, src.line(mod.start), 2,
+                  rule="naming", cap=12)
         for name, pos in mod.signals.items():
             if name in mod.params:
                 continue
             if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
                 g.add("style", "info", f"訊號名稱 '{name}' 不是 snake_case",
-                      "訊號建議小寫加底線（例如 reg_a、data_valid）", f, src.line(pos), 1,
-                      rule="naming", cap=6)
+                      "訊號建議小寫加底線（例如 reg_a、data_valid）", f, src.line(pos), 2,
+                      rule="naming", cap=12)
         for p in sorted(mod.params):
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", p):
                 g.add("style", "info", f"參數名稱 '{p}' 建議全大寫",
@@ -502,11 +524,11 @@ def check_coding(g: Grader, mod: ModuleInfo) -> set[str]:
             if blk.kind == "seq" and a.op == "=":
                 g.add("coding", "warning", f"循序邏輯 always 區塊使用 blocking 指定：{', '.join(sorted(a.lhs))} =",
                       "posedge/negedge 的 always 區塊請使用 non-blocking（<=），避免模擬順序造成的 race",
-                      f, src.line(a.pos), 5, rule="blocking_seq", cap=20)
+                      f, src.line(a.pos), 8, rule="blocking_seq", cap=32)
             if blk.kind == "comb" and a.op == "<=":
                 g.add("coding", "warning", f"組合邏輯 always 區塊使用 non-blocking 指定：{', '.join(sorted(a.lhs))} <=",
                       "always @(*) 請使用 blocking（=），否則模擬結果可能與合成不一致",
-                      f, src.line(a.pos), 5, rule="nonblocking_comb", cap=20)
+                      f, src.line(a.pos), 8, rule="nonblocking_comb", cap=32)
 
         line = src.line(blk.start)
         if blk.kind == "comb" and blk.sens and blk.sens.replace(" ", "") != "*":
@@ -519,7 +541,7 @@ def check_coding(g: Grader, mod: ModuleInfo) -> set[str]:
             if missing:
                 g.add("coding", "error", f"敏感列表不完整，缺少：{', '.join(missing)}",
                       "改用 always @(*)；不完整的敏感列表會造成模擬與合成結果不同",
-                      f, line, 10, rule="sens_incomplete", cap=30)
+                      f, line, 15, rule="sens_incomplete", cap=45)
             else:
                 g.add("coding", "info", "組合邏輯使用手寫敏感列表",
                       "建議改用 always @(*)，之後新增訊號時不會漏掉", f, line, 2, rule="sens_manual", cap=4)
@@ -534,7 +556,7 @@ def check_coding(g: Grader, mod: ModuleInfo) -> set[str]:
                 if blk.kind == "comb":
                     g.add("coding", "warning", "組合邏輯的 case 沒有 default",
                           "加上 default 分支（或在 case 前給預設值），避免推論出 latch",
-                          f, src.line(blk.body_start + cm.start()), 3, rule="case_default_comb", cap=9)
+                          f, src.line(blk.body_start + cm.start()), 5, rule="case_default_comb", cap=15)
                 else:
                     g.add("coding", "info", "case 沒有 default",
                           "FSM 建議加 default 讓非法狀態回到 IDLE，提高可靠度",
@@ -579,7 +601,7 @@ def check_coding(g: Grader, mod: ModuleInfo) -> set[str]:
         if c in assign_lhs:
             g.add("coding", "warning", f"時脈 '{c}' 由組合邏輯產生（gated/derived clock）",
                   "FPGA 請改用 clock enable；ASIC 請使用標準 clock gating cell",
-                  f, src.line(assign_lhs[c]), 10, rule="gated_clock", cap=20)
+                  f, src.line(assign_lhs[c]), 15, rule="gated_clock", cap=30)
 
     # 多重驅動
     multi = set()
@@ -589,7 +611,7 @@ def check_coding(g: Grader, mod: ModuleInfo) -> set[str]:
             multi.add(name)
             g.add("coding", "error", f"訊號 '{name}' 在 {len(ids)} 個不同區塊被指定（多重驅動）",
                   "一個訊號只能在一個 always 或 assign 中被驅動，請合併邏輯",
-                  f, src.line(min(p for _, p in lst)), 15, rule="multi_driver", cap=30)
+                  f, src.line(min(p for _, p in lst)), 25, rule="multi_driver", cap=50)
 
     body = code[mod.body_start:mod.end]
     for m in re.finditer(r"\binitial\b", body):
@@ -604,12 +626,26 @@ def check_coding(g: Grader, mod: ModuleInfo) -> set[str]:
 
 # ======================================================================= external tools
 
+# Windows GUI（打包後沒有主控台）呼叫外部程式時不要跳出黑色視窗
+_NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+
+
+def find_iverilog() -> str | None:
+    p = shutil.which("iverilog")
+    if p:
+        return p
+    for cand in (r"C:\iverilog\bin\iverilog.exe", r"C:\Program Files\iverilog\bin\iverilog.exe"):
+        if Path(cand).is_file():
+            return cand
+    return None
+
+
 def run_iverilog(g: Grader, work: Path, files: list[str], name_map: dict[str, str]) -> bool | None:
-    iv = shutil.which("iverilog")
+    iv = find_iverilog()
     if not iv:
         return None
     r = subprocess.run([iv, "-g2012", "-Wall", "-t", "null", *files], cwd=work,
-                       capture_output=True, text=True, errors="replace")
+                       capture_output=True, text=True, errors="replace", **_NO_WINDOW)
     ok = r.returncode == 0
     seen = set()
     for ln in (r.stdout + r.stderr).splitlines():
@@ -634,10 +670,19 @@ def run_iverilog(g: Grader, work: Path, files: list[str], name_map: dict[str, st
 
 
 def yosys_command() -> list[str] | None:
+    if getattr(sys, "frozen", False):            # 打包後的應用程式：由自己執行內建的 Yosys
+        return [sys.executable, "--run-yosys"]
     for name in ("yosys", "yowasp-yosys"):
         p = shutil.which(name)
         if p:
             return [p]
+    try:
+        import importlib.util
+        if importlib.util.find_spec("yowasp_yosys"):
+            return [sys.executable, "-c",
+                    "import sys, yowasp_yosys; sys.exit(yowasp_yosys.run_yosys(sys.argv[1:]))"]
+    except Exception:
+        pass
     return None
 
 
@@ -660,7 +705,7 @@ def run_yosys(work: Path, files: list[str], top: str, target: str) -> tuple[bool
     (work / "script.ys").write_text(script + "\n", encoding="utf-8")
     try:
         r = subprocess.run(cmd + ["-q", "-l", "yosys.log", "-s", "script.ys"], cwd=work,
-                           capture_output=True, text=True, errors="replace", timeout=900)
+                           capture_output=True, text=True, errors="replace", timeout=900, **_NO_WINDOW)
     except subprocess.TimeoutExpired:
         return False, "Yosys 執行逾時"
     log = (work / "yosys.log").read_text(encoding="utf-8", errors="replace") \
@@ -941,8 +986,8 @@ def check_synthesis(g: Grader, work: Path, top: str, log: str, name_map: dict[st
                 or "Driver-driver conflict" in msg):
             if multi_src:      # 原始碼檢查已回報，避免重複扣分
                 continue
-            g.add("coding", "error", f"多重驅動：{msg}", "一個訊號只能由一處驅動", fname, lineno, 15,
-                  rule="multi_driver", cap=30)
+            g.add("coding", "error", f"多重驅動：{msg}", "一個訊號只能由一處驅動", fname, lineno, 25,
+                  rule="multi_driver", cap=50)
         elif "has no driver" in msg or "is used but has no driver" in msg:
             g.add("coding", "warning", f"訊號沒有被驅動：{msg}", "確認該訊號有被指定值，或移除不用的訊號",
                   fname, lineno, 5, rule="undriven", cap=15)
@@ -966,7 +1011,7 @@ def check_synthesis(g: Grader, work: Path, top: str, log: str, name_map: dict[st
         fname, lineno = latch_srcs.get(n) or loc(n)
         g.add("register", "error", f"推論出 latch：{n}",
               "組合邏輯中所有分支都要指定該訊號（或在 always @(*) 開頭給預設值），case 要有 default",
-              fname, lineno, 25, rule="latch", cap=75)
+              fname, lineno, 30, rule="latch", cap=90)
 
     rtl_regs = rtl_registers(rtl)
     removed = []
@@ -981,7 +1026,7 @@ def check_synthesis(g: Grader, work: Path, top: str, log: str, name_map: dict[st
         hint = "（可能是上面的多重驅動造成）" if multi_src else ""
         g.add("register", "warning", f"暫存器 '{name}' {what}在合成時被移除（沒被使用、常數或重複）{hint}",
               "移除多餘的暫存器，或確認它是否該連到輸出；寬度可以縮小就縮小",
-              *loc(name), penalty=3, rule="reg_removed", cap=15)
+              *loc(name), penalty=5, rule="reg_removed", cap=25)
 
     nores = dict(a["ff_noreset"])
     if a["ff_bits"]:
@@ -1073,8 +1118,27 @@ def choose_top(mods: list[ModuleInfo]) -> list[ModuleInfo]:
     return [m for m in mods if m.name not in used]
 
 
+class GradeError(Exception):
+    """評分無法進行（找不到 module 等），訊息可直接顯示給使用者。"""
+
+
+def list_modules(paths: list[Path]) -> list[str]:
+    """回傳檔案中可評分的 module 名稱（top 候選排前面），供 GUI 選單使用。"""
+    mods = []
+    for p in paths:
+        s = Source(p, p.name, read_text(p))
+        mods += [m for m in parse_modules(s) if not m.is_testbench]
+    tops = {m.name for m in choose_top(mods)}
+    return sorted({m.name for m in mods}, key=lambda n: (n not in tops, n))
+
+
 def grade(paths: list[Path], top: str | None, target: str, budget: int | None,
-          max_line: int = 100) -> tuple[Grader, str]:
+          max_line: int = 100, progress=None) -> tuple[Grader, str]:
+    def step(msg: str) -> None:
+        if progress:
+            progress(msg)
+
+    step("解析原始碼…")
     g = Grader()
     budget = budget or (8 if target == "fpga" else 24)
     sources = []
@@ -1094,14 +1158,18 @@ def grade(paths: list[Path], top: str | None, target: str, budget: int | None,
             g.add("style", "info", f"略過 testbench module '{m.name}'", "評分只針對設計檔", m.src.display,
                   m.src.line(m.start), 0)
     if not design:
-        raise SystemExit("error: 找不到可評分的 module（testbench 會被略過）")
+        raise GradeError("找不到可評分的 module（testbench 會被略過）")
 
     if top:
         if top not in {m.name for m in design}:
-            raise SystemExit(f"error: 找不到 module '{top}'（有：{', '.join(m.name for m in design)}）")
+            raise GradeError(f"找不到 module '{top}'（有：{', '.join(m.name for m in design)}）")
     else:
         tops = choose_top(design)
         top = max(tops or design, key=lambda m: m.end - m.start).name
+        if len(tops) > 1:
+            g.stats["top_candidates"] = [m.name for m in tops]
+            g.add("style", "info", f"偵測到多個 top module（{', '.join(m.name for m in tops)}），"
+                  f"本次評分 {top}", "要評其他 module 請用 --top 指定（應用程式中可在選單切換）")
     g.stats["top"] = top
     g.stats["files"] = [s.display for s in sources]
     g.sources = [(s.display, s.raw) for s in sources]
@@ -1121,6 +1189,7 @@ def grade(paths: list[Path], top: str | None, target: str, budget: int | None,
             files.append(fn)
             name_map[fn] = s.display
 
+        step("語法檢查（iverilog）…")
         iv_ok = run_iverilog(g, work, files, name_map)
         if iv_ok is None:
             g.add("syntax", "info", "找不到 iverilog，語法僅以 Yosys 檢查", "安裝 Icarus Verilog 可得到更完整的語法檢查")
@@ -1135,6 +1204,7 @@ def grade(paths: list[Path], top: str | None, target: str, budget: int | None,
             if iv_ok is None:
                 g.na["syntax"] = "沒有可用的編譯器"
         else:
+            step("合成與時序分析（Yosys）…")
             ok, log = run_yosys(work, files, top, target)
             if not ok:
                 errs = [ln for ln in log.splitlines() if "ERROR" in ln][:3]
@@ -1160,7 +1230,11 @@ def print_report(g: Grader, top: str, show_info: bool = True) -> None:
     print(bar, file=out)
     print(f" vgrade {__version__} 評分報告   top: {top}   檔案: {', '.join(g.stats.get('files', []))}", file=out)
     print(bar, file=out)
-    print(f" 總分 {total:5.1f} / 100   等級 {grade_letter(total)}", file=out)
+    note = f"（有錯誤時等級最高 {ERROR_GRADE_CAP}）" if g.letter() != grade_letter(total) else ""
+    print(f" 總分 {total:5.1f} / 100   等級 {g.letter()}{note}", file=out)
+    sp = g.severity_penalty()
+    if sp:
+        print(f"      = 類別加權 {g.weighted():.1f} − 嚴重度扣分 {sp:g}（錯誤 ×4、警告 ×1）", file=out)
     print("", file=out)
     print(f" {pad('類別', 14)}{pad('分數', 8)}{pad('權重', 6)}", file=out)
     for c, (label, w) in CATEGORIES.items():
@@ -1230,12 +1304,17 @@ def main(argv: list[str] | None = None) -> int:
     for p in args.sources:
         if not p.is_file():
             ap.error(f"找不到檔案：{p}")
-    g, top = grade(args.sources, args.top, args.target, args.max_levels, args.max_line)
+    try:
+        g, top = grade(args.sources, args.top, args.target, args.max_levels, args.max_line)
+    except GradeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     print_report(g, top, show_info=not args.no_info)
     if args.json:
         data = {
             "version": __version__, "top": top, "total": round(g.total(), 1),
-            "grade": grade_letter(g.total()),
+            "weighted": round(g.weighted(), 1), "severity_penalty": g.severity_penalty(),
+            "grade": g.letter(),
             "scores": {c: (None if s is None else round(s, 1)) for c, s in g.scores().items()},
             "not_applicable": g.na, "stats": g.stats,
             "issues": [asdict(i) for i in g.issues],

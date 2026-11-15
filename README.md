@@ -56,6 +56,15 @@
 
 不適用的類別（例如純組合電路沒有 pipeline）會標成 N/A，權重自動重新分配。
 
+**總分計算**
+
+```
+總分 = 類別加權平均 − 嚴重度扣分（每個錯誤 −4、每個警告 −1，上限 30）
+```
+
+嚴重度扣分讓真正的 bug（多重驅動、latch、敏感列表不完整…）不會被類別權重稀釋。
+等級：A ≥ 90、B ≥ 80、C ≥ 70、D ≥ 60；**有「錯誤」等級的問題時，等級最高為 C**。
+
 ### 時序與 pipeline 怎麼算？
 
 1. 用 Yosys 合成並 flatten，映射到 **LUT6**（`--target fpga`，預設）或**通用邏輯閘**（`--target asic`）
@@ -65,7 +74,26 @@
 
 > 邏輯級數是**與製程無關的估計值**，適合比較設計好壞。FPGA 的加法器實際會用 carry chain，所以寬加法器的級數會被高估。
 
-## 安裝
+## 桌面應用程式（Windows，免安裝 Python）
+
+到 [Releases](https://github.com/WANG-JUI-CHAO/vgrade/releases) 下載 `vgrade-win64.zip`，解壓縮後執行 `vgrade.exe`：
+
+![vgrade 桌面程式](docs/app_preview.png)
+
+1. 把 `.v` / `.sv` 檔，或**整個 Vivado 專案資料夾**拖進視窗（會自動略過 `.sim`、`.gen` 與 testbench）
+2. 需要時選擇 top module 與時序目標（FPGA / ASIC）
+3. 按「開始評分」，完成後自動開啟 HTML 評分報告（另存於 `%LOCALAPPDATA%\vgrade\reports`）
+
+程式已內建 Yosys；第一次評分需要編譯 Yosys，約 30 秒到 1 分鐘，之後只要幾秒。若電腦有安裝 Icarus Verilog，會自動用於語法檢查。
+
+自行打包：
+
+```bash
+pip install pyinstaller tkinterdnd2 yowasp-yosys
+python build_exe.py        # 產出 dist/vgrade/vgrade.exe 與 dist/vgrade-win64.zip
+```
+
+## 命令列安裝
 
 需要 Python 3.10+。
 

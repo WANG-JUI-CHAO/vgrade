@@ -12,7 +12,8 @@ import html
 import math
 from collections import Counter, defaultdict
 
-from vgrade import CATEGORIES, SEV_LABEL, SEV_ORDER, grade_letter
+from vgrade import (CATEGORIES, ERROR_GRADE_CAP, SEV_LABEL, SEV_ORDER, SEVERITY_CAP, SEVERITY_PENALTY,
+                    grade_letter)
 
 esc = html.escape
 
@@ -359,7 +360,8 @@ def _path_chart(depth: dict, budget: int, unit: str) -> str:
 def render_html(g, top: str, version: str) -> str:
     scores = g.scores()
     total = g.total()
-    letter = grade_letter(total)
+    letter = g.letter()
+    capped = letter != grade_letter(total)
     st = g.stats
     issues = sorted(g.issues, key=lambda i: (SEV_ORDER[i.severity], -i.penalty, i.file, i.line))
     files = [d for d, _ in g.sources]
@@ -387,6 +389,11 @@ def render_html(g, top: str, version: str) -> str:
     w('<div class="total">')
     w(f'<div class="num">{total:.1f}</div><div class="of">/ 100 分</div>')
     w(f'<span class="badge-grade {_grade_class(letter)}">等級 {letter}</span>')
+    sp = g.severity_penalty()
+    if sp:
+        w(f'<div class="meta">類別加權 {g.weighted():.1f} − 嚴重度扣分 {sp:g}</div>')
+    if capped:
+        w(f'<div class="meta">有「錯誤」等級的問題，等級最高為 {ERROR_GRADE_CAP}</div>')
     w('</div><div><h2>各類別分數</h2><div class="bars">')
     for c, (label, wt) in CATEGORIES.items():
         s = scores[c]
@@ -492,7 +499,10 @@ def render_html(g, top: str, version: str) -> str:
     # ---------------- footer
     weights = "、".join(f"{label} {wt}%" for label, wt in CATEGORIES.values())
     w('<footer>')
-    w(f'評分方式：各類別滿分 100，依問題扣分；總分為加權平均（{weights}），不適用的類別不計入。<br>')
+    w(f'評分方式：各類別滿分 100，依問題扣分；類別加權平均（{weights}，不適用的類別不計入），'
+      f'再扣嚴重度分數（每個錯誤 −{SEVERITY_PENALTY["error"]}、每個警告 −{SEVERITY_PENALTY["warning"]}，'
+      f'上限 {SEVERITY_CAP}）。等級：A ≥ 90、B ≥ 80、C ≥ 70、D ≥ 60；'
+      f'有「錯誤」等級的問題時，等級最高為 {ERROR_GRADE_CAP}。<br>')
     w('時序與 pipeline 依 Yosys 合成後的 netlist 計算邏輯級數，為與製程無關的估計值；'
       'FPGA 加法器實際使用 carry chain，寬加法器級數會被高估。<br>')
     w(f'由 vgrade {esc(version)} 產生 · https://github.com/WANG-JUI-CHAO/vgrade')
