@@ -7,8 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import i18n  # noqa: E402
 import vgrade  # noqa: E402
 
+i18n.set_lang("zh")          # 測試內容以中文訊息比對
 EXAMPLES = ROOT / "examples"
 HAS_SYNTH = vgrade.yosys_command() is not None
 
@@ -25,8 +27,44 @@ def source_check(code: str) -> vgrade.Grader:
     return g
 
 
-def rules(g: vgrade.Grader, cat: str | None = None) -> str:
-    return "\n".join(i.message for i in g.issues if cat is None or i.category == cat)
+def rules(g: vgrade.Grader, cat: str | None = None, lang: str = "zh") -> str:
+    return "\n".join(i.msg(lang) for i in g.issues if cat is None or i.category == cat)
+
+
+class TestI18n(unittest.TestCase):
+    def test_every_string_has_both_languages(self):
+        for key, entry in i18n.S.items():
+            self.assertTrue(entry.get("zh"), f"{key} 缺中文")
+            if key != "html.u_items":                  # 英文刻意留空
+                self.assertTrue(entry.get("en"), f"{key} missing English")
+
+    def test_every_issue_key_is_translated(self):
+        import re
+        src = (ROOT / "vgrade.py").read_text(encoding="utf-8")
+        keys = set(re.findall(r'g\.add\(\s*"\w+",\s*"\w+",\s*"([\w.]+)"', src))
+        keys |= set(re.findall(r'g\.na\[[^\]]+\]\s*=\s*"([\w.]+)"', src))
+        keys |= set(re.findall(r'GradeError\("([\w.]+)"', src))
+        self.assertGreater(len(keys), 40)
+        missing = sorted(k for k in keys if not i18n.has(k))
+        self.assertEqual(missing, [])
+
+    def test_placeholders_match(self):
+        import string
+        for key, entry in i18n.S.items():
+            fields = [{f for _, f, _, _ in string.Formatter().parse(entry[lang]) if f} for lang in ("zh", "en")]
+            self.assertEqual(fields[0], fields[1], key)
+
+    def test_issue_renders_in_both_languages(self):
+        issue = vgrade.Issue("coding", "error", "multi_driver", {"name": "q", "n": 2})
+        self.assertIn("多重驅動", issue.msg("zh"))
+        self.assertIn("multiple drivers", issue.msg("en"))
+        self.assertIn("always", issue.sugg("en"))
+        self.assertEqual(vgrade.cat_label("register", "en"), "Registers")
+
+    def test_suffix_and_param_reference(self):
+        issue = vgrade.Issue("register", "warning", "reg_removed_all", {"name": "p", "_suffix": "hint.multi_driver"})
+        self.assertTrue(issue.msg("en").endswith("(possibly caused by the multiple drivers above)"))
+        self.assertEqual(i18n.t("html.p_tip", "en", label="x", d=3, unit="@unit.asic"), "x: longest 3 gates levels")
 
 
 class TestParsing(unittest.TestCase):
@@ -82,7 +120,7 @@ class TestSourceChecks(unittest.TestCase):
         g = source_check("module m(input a, input b, output reg y);\n"
                          "always @(a or b) y = a & b;\nendmodule")
         self.assertNotIn("缺少", rules(g))
-        self.assertTrue(any(i.severity == "info" and "敏感列表" in i.message for i in g.issues))
+        self.assertTrue(any(i.severity == "info" and "敏感列表" in i.msg("zh") for i in g.issues))
 
     def test_multi_driver(self):
         g = source_check("module m(input clk, input a, output reg y);\n"
@@ -183,6 +221,30 @@ class TestSynthesis(unittest.TestCase):
         self.assertIn("&lt;=", page)                       # 原始碼有被跳脫
         self.assertNotIn("<= b", page)
         self.assertEqual(page.count('<tr data-sev='), len(g.issues))
+
+    def test_html_report_english(self):
+        from report_html import render_html
+        g, top = vgrade.grade([EXAMPLES / "bad_design.v"], None, "fpga", None)
+        page = render_html(g, top, vgrade.__version__, lang="en")
+        self.assertIn('<html lang="en">', page)
+        self.assertIn("Verilog grading report: BadDesign", page)
+        self.assertIn("Latch inferred: tmp", page)
+        self.assertIn("Incomplete sensitivity list, missing: b", page)
+        body = page.split("<main>", 1)[1]
+        cjk = [c for c in body if "一" <= c <= "鿿"]
+        self.assertEqual(cjk, [], "English report contains Chinese text outside the source code")
+
+    def test_cli_english_json(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "r.json"
+            rc = vgrade.main([str(EXAMPLES / "bad_design.v"), "--lang", "en", "--json", str(out)])
+            data = json.loads(out.read_text(encoding="utf-8"))
+        i18n.set_lang("zh")
+        self.assertEqual(rc, 0)
+        self.assertEqual(data["lang"], "en")
+        self.assertTrue(any(i["message"] == "Latch inferred: tmp" for i in data["issues"]))
+        self.assertTrue(all("key" in i and "params" in i for i in data["issues"]))
 
     def test_combinational_design_pipeline_na(self):
         with tempfile.TemporaryDirectory() as d:

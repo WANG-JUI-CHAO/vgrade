@@ -12,8 +12,9 @@ import html
 import math
 from collections import Counter, defaultdict
 
-from vgrade import (CATEGORIES, ERROR_GRADE_CAP, SEV_LABEL, SEV_ORDER, SEVERITY_CAP, SEVERITY_PENALTY,
-                    grade_letter)
+from i18n import get_lang, t
+from vgrade import (CATEGORIES, ERROR_GRADE_CAP, SEV_ORDER, SEVERITY_CAP, SEVERITY_PENALTY, cat_label,
+                    grade_letter, sev_label)
 
 esc = html.escape
 
@@ -208,7 +209,7 @@ footer { color: var(--muted); font-size: 12px; margin-top: 28px; line-height: 1.
   tr[hidden] { display: none; }
   td { border: 0; padding: 2px 0; }
   td:nth-child(1), td:nth-child(2), td.pen { display: inline-block; width: auto; margin-right: 10px; }
-  td.pen::before { content: "扣分 "; color: var(--muted); }
+  td.pen::before { content: var(--pen-prefix, ""); color: var(--muted); }
   td.loc { white-space: normal; }
   .ann { margin-left: 12px; }
   .cl { grid-template-columns: 40px 1fr; }
@@ -272,9 +273,9 @@ def _grade_class(letter: str) -> str:
     return {"A": "g-good", "B": "g-good", "C": "g-warning", "D": "g-warning"}.get(letter, "g-critical")
 
 
-def _sev_badge(sev: str) -> str:
+def _sev_badge(sev: str, lang: str) -> str:
     return (f'<span class="sev sev-{sev}"><span class="ic" aria-hidden="true">{SEV_ICON[sev]}</span>'
-            f'{SEV_LABEL[sev]}</span>')
+            f'{sev_label(sev, lang)}</span>')
 
 
 def _nice_max(v: float) -> tuple[int, int]:
@@ -288,22 +289,22 @@ def _nice_max(v: float) -> tuple[int, int]:
     return step * math.ceil(v / step), step
 
 
-def _stage_chart(stages: dict, budget: int, unit: str) -> str:
+def _stage_chart(stages: dict, budget: int, unit: str, lang: str) -> str:
     data = sorted((int(k), v) for k, v in stages.items() if int(k) >= 0)
     if not data:
-        return '<p class="empty">沒有可分級的暫存器。</p>'
+        return f'<p class="empty">{t("html.no_stage", lang)}</p>'
     W, H = 560, 230
     ml, mr, mt, mb = 34, 12, 22, 30
     pw, ph = W - ml - mr, H - mt - mb
     peak = max(v["depth"] for _, v in data)
     ymax, step = _nice_max(max(peak, budget) * 1.12)
     y = lambda d: mt + ph - d / ymax * ph   # noqa: E731
-    parts = [f'<svg class="chart" viewBox="0 0 {W} {H}" role="img" '
-             f'aria-label="各 pipeline 級的最大邏輯深度長條圖，建議上限 {budget}">']
-    for t in range(0, ymax + 1, step):
-        cls = "base" if t == 0 else "grid"
-        parts.append(f'<line class="{cls}" x1="{ml}" x2="{W - mr}" y1="{y(t):.1f}" y2="{y(t):.1f}"/>')
-        parts.append(f'<text x="{ml - 6}" y="{y(t) + 4:.1f}" text-anchor="end">{t}</text>')
+    aria = esc(t("html.stage_aria", lang, budget=budget))
+    parts = [f'<svg class="chart" viewBox="0 0 {W} {H}" role="img" aria-label="{aria}">']
+    for tk in range(0, ymax + 1, step):
+        cls = "base" if tk == 0 else "grid"
+        parts.append(f'<line class="{cls}" x1="{ml}" x2="{W - mr}" y1="{y(tk):.1f}" y2="{y(tk):.1f}"/>')
+        parts.append(f'<text x="{ml - 6}" y="{y(tk) + 4:.1f}" text-anchor="end">{tk}</text>')
     n = len(data)
     slot = pw / n
     bw = max(8.0, min(44.0, slot * 0.62))
@@ -312,8 +313,8 @@ def _stage_chart(stages: dict, budget: int, unit: str) -> str:
         d = v["depth"]
         x = ml + slot * i + (slot - bw) / 2
         y0 = mt + ph
-        tipt = f"第 {k} 級：最大邏輯深度 {d} 級 {unit}，{v['ff_bits']} 個暫存器 bit" + \
-               ("（超過建議上限）" if d > budget else "")
+        tipt = t("html.stage_tip", lang, k=k, d=d, unit=unit, b=v["ff_bits"]) + \
+            (t("html.over", lang) if d > budget else "")
         parts.append(f'<g data-tip="{esc(tipt)}">')
         parts.append(f'<rect class="hit" x="{ml + slot * i:.1f}" y="{mt}" width="{slot:.1f}" height="{ph}"/>')
         if d > 0:
@@ -328,36 +329,43 @@ def _stage_chart(stages: dict, budget: int, unit: str) -> str:
         parts.append(f'<text x="{ml + slot * i + slot / 2:.1f}" y="{H - 10}" text-anchor="middle">S{k}</text>')
     by = y(budget)
     parts.append(f'<line class="budget" x1="{ml}" x2="{W - mr}" y1="{by:.1f}" y2="{by:.1f}"/>')
-    parts.append(f'<text class="budget-label" x="{W - mr}" y="{by - 5:.1f}" text-anchor="end">建議上限 {budget}</text>')
+    parts.append(f'<text class="budget-label" x="{W - mr}" y="{by - 5:.1f}" text-anchor="end">'
+                 f'{esc(t("html.budget", lang, budget=budget))}</text>')
     parts.append("</svg>")
     return "".join(parts)
 
 
-def _path_chart(depth: dict, budget: int, unit: str) -> str:
-    rows = [("in2reg", "輸入 → 暫存器"), ("reg2reg", "暫存器 → 暫存器"),
-            ("reg2out", "暫存器 → 輸出"), ("in2out", "輸入 → 輸出")]
+def _path_chart(depth: dict, budget: int, unit: str, lang: str) -> str:
+    rows = ["in2reg", "reg2reg", "reg2out", "in2out"]
     scale = max([v for v in depth.values() if v >= 0] + [budget]) * 1.1 or 1
     out = ['<div class="hbars">']
-    for key, label in rows:
+    for key in rows:
+        label = t(f"html.p_{key}", lang)
         d = depth.get(key, -1)
         if d < 0:
-            tipt = f"{label}：沒有這類路徑"
-            val = '<span class="hv none">無</span>'
+            tipt = t("html.p_none_tip", lang, label=label)
+            val = f'<span class="hv none">{t("html.p_none", lang)}</span>'
             fill = ""
         else:
-            tipt = f"{label}：最長 {d} 級 {unit}" + ("（超過建議上限）" if d > budget else "")
+            tipt = t("html.p_tip", lang, label=label, d=d, unit=unit) + (t("html.over", lang) if d > budget else "")
             val = f'<span class="hv">{d}</span>'
             fill = f'<span class="fill" style="width:{d / scale * 100:.1f}%"></span>' if d > 0 else ""
-        out.append(f'<div class="hrow" data-tip="{esc(tipt)}"><span>{label}</span>'
-                   f'<span class="htrack"><span class="track" style="position:absolute;inset:3px 0;height:auto;'
-                   f'background:none"></span>{fill}<span class="baseline"></span>'
+        out.append(f'<div class="hrow" data-tip="{esc(tipt)}"><span>{esc(label)}</span>'
+                   f'<span class="htrack">{fill}<span class="baseline"></span>'
                    f'<span class="limit" style="left:{budget / scale * 100:.1f}%"></span></span>{val}</div>')
     out.append("</div>")
-    out.append(f'<div class="legend-note"><span class="dash"></span>建議上限 {budget} 級 {unit}</div>')
+    out.append(f'<div class="legend-note"><span class="dash"></span>'
+               f'{esc(t("html.budget_unit", lang, budget=budget, unit=unit))}</div>')
     return "".join(out)
 
 
-def render_html(g, top: str, version: str) -> str:
+def _unit(n, key: str, lang: str) -> str:
+    u = t(key, lang)
+    return f"{n}<small>{esc(u)}</small>" if u else str(n)
+
+
+def render_html(g, top: str, version: str, lang: str | None = None) -> str:
+    lang = lang or get_lang()
     scores = g.scores()
     total = g.total()
     letter = g.letter()
@@ -369,106 +377,111 @@ def render_html(g, top: str, version: str) -> str:
     sev_count = Counter(i.severity for i in issues)
     cat_count = Counter(i.category for i in issues)
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    unit = st.get("unit", "級")
+    unit = t(f"unit.{st.get('target', 'fpga')}", lang)
     budget = st.get("budget", 8)
+    T = lambda key, **kw: t(key, lang, **kw)   # noqa: E731
 
     P: list[str] = []
     w = P.append
-    w('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">')
+    html_lang = "zh-Hant" if lang == "zh" else "en"
+    w(f'<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8">')
     w('<meta name="viewport" content="width=device-width, initial-scale=1">')
-    w(f"<title>vgrade 評分報告 · {esc(top)}</title><style>{CSS}</style></head><body><main>")
+    w(f"<title>{esc(T('html.title', top=top))}</title><style>{CSS}</style></head><body><main>")
 
     # ---------------- header + hero
-    target = {"fpga": "FPGA（LUT6 級數）", "asic": "ASIC（通用邏輯閘級數）"}.get(st.get("target", ""), "—")
+    target = T(f"target.{st['target']}") if "target" in st else "—"
     w('<header>')
-    w(f'<h1>Verilog 評分報告：{esc(top)}</h1>')
-    w(f'<div class="meta">檔案：{esc(", ".join(files))}　·　時序目標：{target}　·　{now}　·　vgrade {esc(version)}</div>')
+    w(f'<h1>{esc(T("html.h1", top=top))}</h1>')
+    w(f'<div class="meta">{esc(T("html.meta", files=", ".join(files), target=target, time=now, ver=version))}</div>')
     w('</header>')
 
     w('<section class="card hero">')
     w('<div class="total">')
-    w(f'<div class="num">{total:.1f}</div><div class="of">/ 100 分</div>')
-    w(f'<span class="badge-grade {_grade_class(letter)}">等級 {letter}</span>')
+    w(f'<div class="num">{total:.1f}</div><div class="of">{T("html.of100")}</div>')
+    w(f'<span class="badge-grade {_grade_class(letter)}">{esc(T("html.grade", g=letter))}</span>')
     sp = g.severity_penalty()
     if sp:
-        w(f'<div class="meta">類別加權 {g.weighted():.1f} − 嚴重度扣分 {sp:g}</div>')
+        w(f'<div class="meta">{esc(T("html.breakdown", w=f"{g.weighted():.1f}", p=f"{sp:g}"))}</div>')
     if capped:
-        w(f'<div class="meta">有「錯誤」等級的問題，等級最高為 {ERROR_GRADE_CAP}</div>')
-    w('</div><div><h2>各類別分數</h2><div class="bars">')
-    for c, (label, wt) in CATEGORIES.items():
+        w(f'<div class="meta">{esc(T("html.capped", cap=ERROR_GRADE_CAP))}</div>')
+    w(f'</div><div><h2>{T("html.cat_scores")}</h2><div class="bars">')
+    for c, wt in CATEGORIES.items():
         s = scores[c]
+        label = esc(cat_label(c, lang))
         if s is None:
             w(f'<div class="bar-row na"><span class="bl">{label}</span><span class="track">'
-              f'<span class="na-text">不適用：{esc(g.na[c])}</span></span><span class="bv">—</span>'
+              f'<span class="na-text">{esc(T("html.na", reason=T(g.na[c])))}</span></span><span class="bv">—</span>'
               f'<span class="bw">{wt}%</span></div>')
         else:
-            tipt = f"{label}：{s:.0f} 分（權重 {wt}%），{cat_count.get(c, 0)} 個問題"
+            tipt = T("html.bar_tip", label=cat_label(c, lang), s=f"{s:.0f}", w=wt, n=cat_count.get(c, 0))
             w(f'<div class="bar-row" data-tip="{esc(tipt)}"><span class="bl">{label}</span>'
               f'<span class="track"><span class="fill" style="width:{s:.1f}%"></span></span>'
               f'<span class="bv">{s:.0f}</span><span class="bw">{wt}%</span></div>')
     w('</div></div></section>')
 
     # ---------------- tiles
+    tiles = []
     if "ff_bits" in st:
         cr = st["critical"]
         lat = st.get("latency", {})
-        lat_txt = "、".join(f"{k} {v}" for k, v in lat.items()) or "—"
+        lat_txt = ", ".join(f"{k} {v}" for k, v in lat.items()) or "—"
         tiles = [
-            ("暫存器", f'{st["ff_bits"]}<small>bits</small>', f'無 reset：{st["ff_noreset_bits"]} bits'),
-            ("Latch", f'{st["latch_bits"]}<small>bits</small>',
-             "應為 0" if st["latch_bits"] else "沒有推論出 latch"),
-            ("組合邏輯", f'{st["comb_cells"]}<small>{esc(unit)}</small>', "合成後數量"),
-            ("最長邏輯深度", f'{max(cr["levels"], 0)}<small>級</small>',
-             f'建議 ≤ {budget}　{esc(cr["kind"])} {esc(cr["endpoint"])}'),
-            ("輸出延遲", f'{max(lat.values()) if lat else "—"}<small>cycle</small>', f"各輸出：{esc(lat_txt)}"),
+            (T("html.t_regs"), _unit(st["ff_bits"], "html.u_bits", lang),
+             T("html.t_regs_sub", n=st["ff_noreset_bits"])),
+            (T("html.t_latch"), _unit(st["latch_bits"], "html.u_bits", lang),
+             T("html.t_latch_bad") if st["latch_bits"] else T("html.t_latch_ok")),
+            (T("html.t_logic"), f'{st["comb_cells"]}<small>{esc(unit)}</small>', T("html.t_logic_sub")),
+            (T("html.t_depth"), _unit(max(cr["levels"], 0), "html.u_levels", lang),
+             T("html.t_depth_sub", budget=budget, kind=cr["kind"], end=cr["endpoint"])),
+            (T("html.t_latency"), _unit(max(lat.values()) if lat else "—", "html.u_cycle", lang),
+             T("html.t_latency_sub", text=lat_txt)),
         ]
-    else:
-        tiles = []
-    tiles.append(("問題", f'{len(issues)}<small>項</small>',
-                  f'錯誤 {sev_count.get("error", 0)} · 警告 {sev_count.get("warning", 0)} · 建議 {sev_count.get("info", 0)}'))
+    tiles.append((T("html.t_issues"), _unit(len(issues), "html.u_items", lang),
+                  T("html.t_issues_sub", e=sev_count.get("error", 0), w=sev_count.get("warning", 0),
+                    i=sev_count.get("info", 0))))
     w('<section class="tiles" style="margin-top:16px">')
     for k, v, s in tiles:
-        w(f'<div class="tile"><div class="k">{k}</div><div class="v">{v}</div><div class="s">{s}</div></div>')
+        w(f'<div class="tile"><div class="k">{esc(k)}</div><div class="v">{v}</div><div class="s">{esc(s)}</div></div>')
     w('</section>')
 
     # ---------------- charts
     if "ff_bits" in st:
         w('<section class="charts" style="margin-top:16px">')
-        w('<div class="card"><h2>Pipeline 各級邏輯深度</h2>'
-          '<p class="chart-sub">S<i>n</i> = 距離輸入第 n 級暫存器；各級深度越接近越平衡</p>')
-        w(_stage_chart(st.get("stages", {}), budget, unit))
-        w('</div><div class="card"><h2>各類路徑最長深度</h2>'
-          '<p class="chart-sub">輸入→輸出若有路徑，代表輸出沒有經過暫存器</p>')
-        w(_path_chart(st.get("depth", {}), budget, unit))
+        w(f'<div class="card"><h2>{T("html.stage_title")}</h2><p class="chart-sub">{T("html.stage_sub")}</p>')
+        w(_stage_chart(st.get("stages", {}), budget, unit, lang))
+        w(f'</div><div class="card"><h2>{T("html.path_title")}</h2><p class="chart-sub">{T("html.path_sub")}</p>')
+        w(_path_chart(st.get("depth", {}), budget, unit, lang))
         w('</div></section>')
 
     # ---------------- issues
-    w('<section class="card" id="issues"><h2>問題清單</h2>')
+    w(f'<section class="card" id="issues"><h2>{T("html.issues")}</h2>')
     if issues:
-        w('<div class="filters" role="group" aria-label="篩選">')
+        w(f'<div class="filters" role="group" aria-label="{T("html.filter")}">')
         for s in ("error", "warning", "info"):
             w(f'<button class="chip" type="button" data-f-sev="{s}" aria-pressed="true">'
-              f'{_sev_badge(s)}<span class="cnt">{sev_count.get(s, 0)}</span></button>')
-        w('<select id="f-cat" aria-label="類別"><option value="all">全部類別</option>')
-        for c, (label, _) in CATEGORIES.items():
+              f'{_sev_badge(s, lang)}<span class="cnt">{sev_count.get(s, 0)}</span></button>')
+        w(f'<select id="f-cat" aria-label="{T("html.th_cat")}"><option value="all">{T("html.all_cats")}</option>')
+        for c in CATEGORIES:
             if cat_count.get(c):
-                w(f'<option value="{c}">{label}（{cat_count[c]}）</option>')
+                w(f'<option value="{c}">{esc(cat_label(c, lang))} ({cat_count[c]})</option>')
         w('</select></div>')
-        w('<div class="table-wrap"><table><thead><tr><th>嚴重度</th><th>類別</th><th>位置</th>'
-          '<th>問題與建議</th><th style="text-align:right">扣分</th></tr></thead><tbody>')
+        w(f'<div class="table-wrap" style="--pen-prefix:\'{T("html.pen_prefix")}\'"><table><thead><tr>'
+          f'<th>{T("html.th_sev")}</th><th>{T("html.th_cat")}</th><th>{T("html.th_loc")}</th>'
+          f'<th>{T("html.th_msg")}</th><th style="text-align:right">{T("html.th_pen")}</th></tr></thead><tbody>')
         for i in issues:
             if i.line and i.file in fidx:
                 loc = f'<a href="#L-{fidx[i.file]}-{i.line}">{esc(i.file)}:{i.line}</a>'
             else:
-                loc = esc(i.file) if i.file else '<span class="muted">整體</span>'
-            sugg = f'<div class="sugg">{esc(i.suggestion)}</div>' if i.suggestion else ""
+                loc = esc(i.file) if i.file else f'<span class="muted">{T("html.overall")}</span>'
+            sg = i.sugg(lang)
+            sugg = f'<div class="sugg">{esc(sg)}</div>' if sg else ""
             pen = f"−{i.penalty:g}" if i.penalty else "—"
-            w(f'<tr data-sev="{i.severity}" data-cat="{i.category}"><td>{_sev_badge(i.severity)}</td>'
-              f'<td>{CATEGORIES[i.category][0]}</td><td class="loc">{loc}</td>'
-              f'<td>{esc(i.message)}{sugg}</td><td class="pen">{pen}</td></tr>')
-        w('</tbody></table><p class="empty" id="no-match" hidden>沒有符合篩選條件的項目。</p></div>')
+            w(f'<tr data-sev="{i.severity}" data-cat="{i.category}"><td>{_sev_badge(i.severity, lang)}</td>'
+              f'<td>{esc(cat_label(i.category, lang))}</td><td class="loc">{loc}</td>'
+              f'<td>{esc(i.msg(lang))}{sugg}</td><td class="pen">{pen}</td></tr>')
+        w(f'</tbody></table><p class="empty" id="no-match" hidden>{T("html.no_match")}</p></div>')
     else:
-        w('<p class="empty">沒有發現任何問題，做得好！</p>')
+        w(f'<p class="empty">{T("html.no_issues")}</p>')
     w('</section>')
 
     # ---------------- source view
@@ -476,36 +489,35 @@ def render_html(g, top: str, version: str) -> str:
     for i in issues:
         if i.line and i.file in fidx:
             by_line[(fidx[i.file], i.line)].append(i)
-    w('<section class="card"><h2>原始碼標註</h2>'
-      '<p class="chart-sub">有問題的行以底色標示（紅：錯誤、黃：警告、灰：建議），說明寫在該行下方</p>')
+    w(f'<section class="card"><h2>{T("html.src_title")}</h2><p class="chart-sub">{T("html.src_sub")}</p>')
     for fi, (name, raw) in enumerate(g.sources):
         lines = raw.splitlines() or [""]
         n_iss = sum(len(v) for (f, _), v in by_line.items() if f == fi)
         opened = " open" if len(lines) <= 600 else ""
         w(f'<details class="src"{opened}><summary>{esc(name)} '
-          f'<span class="muted">· {len(lines)} 行 · {n_iss} 個標註</span></summary><div class="code">')
+          f'<span class="muted">{esc(T("html.src_summary", lines=len(lines), n=n_iss))}</span></summary>'
+          f'<div class="code">')
         for ln_no, text in enumerate(lines, 1):
             here = by_line.get((fi, ln_no), [])
             hl = f" hl-{min(here, key=lambda x: SEV_ORDER[x.severity]).severity}" if here else ""
             w(f'<div class="cl{hl}" id="L-{fi}-{ln_no}"><span class="no">{ln_no}</span>'
               f'<span class="tx">{esc(text.expandtabs(4)) or " "}</span></div>')
             for i in here:
-                sugg = f'<div class="sugg">{esc(i.suggestion)}</div>' if i.suggestion else ""
-                w(f'<div class="ann" data-sev="{i.severity}" data-cat="{i.category}">{_sev_badge(i.severity)} '
-                  f'<span>[{CATEGORIES[i.category][0]}] {esc(i.message)}</span>{sugg}</div>')
+                sg = i.sugg(lang)
+                sugg = f'<div class="sugg">{esc(sg)}</div>' if sg else ""
+                w(f'<div class="ann" data-sev="{i.severity}" data-cat="{i.category}">{_sev_badge(i.severity, lang)} '
+                  f'<span>[{esc(cat_label(i.category, lang))}] {esc(i.msg(lang))}</span>{sugg}</div>')
         w('</div></details>')
     w('</section>')
 
     # ---------------- footer
-    weights = "、".join(f"{label} {wt}%" for label, wt in CATEGORIES.values())
+    sep = "、" if lang == "zh" else ", "
+    weights = sep.join(f"{cat_label(c, lang)} {wt}%" for c, wt in CATEGORIES.items())
     w('<footer>')
-    w(f'評分方式：各類別滿分 100，依問題扣分；類別加權平均（{weights}，不適用的類別不計入），'
-      f'再扣嚴重度分數（每個錯誤 −{SEVERITY_PENALTY["error"]}、每個警告 −{SEVERITY_PENALTY["warning"]}，'
-      f'上限 {SEVERITY_CAP}）。等級：A ≥ 90、B ≥ 80、C ≥ 70、D ≥ 60；'
-      f'有「錯誤」等級的問題時，等級最高為 {ERROR_GRADE_CAP}。<br>')
-    w('時序與 pipeline 依 Yosys 合成後的 netlist 計算邏輯級數，為與製程無關的估計值；'
-      'FPGA 加法器實際使用 carry chain，寬加法器級數會被高估。<br>')
-    w(f'由 vgrade {esc(version)} 產生 · https://github.com/WANG-JUI-CHAO/vgrade')
+    w(esc(T("html.footer1", weights=weights, pe=SEVERITY_PENALTY["error"], pw=SEVERITY_PENALTY["warning"],
+            cap=SEVERITY_CAP, gcap=ERROR_GRADE_CAP)) + "<br>")
+    w(esc(T("html.footer2")) + "<br>")
+    w(esc(T("html.footer3", ver=version)) + " · https://github.com/WANG-JUI-CHAO/vgrade")
     w('</footer>')
 
     w(f'</main><div id="tip" role="tooltip" hidden></div><script>{JS}</script></body></html>')

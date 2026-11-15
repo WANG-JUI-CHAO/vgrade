@@ -1,5 +1,7 @@
 # vgrade — Verilog 程式碼品質評分工具
 
+**繁體中文** | [English](README.en.md)
+
 > 不只看「功能對不對」，而是像資深工程師 code review 一樣，從 **語法、格式、編碼規範、暫存器使用、時序、pipeline** 六個面向替 Verilog 設計打分，並告訴你每個問題在哪一行、該怎麼改。
 
 ```
@@ -83,6 +85,9 @@
 1. 把 `.v` / `.sv` 檔，或**整個 Vivado 專案資料夾**拖進視窗（會自動略過 `.sim`、`.gen` 與 testbench）
 2. 需要時選擇 top module 與時序目標（FPGA / ASIC）
 3. 按「開始評分」，完成後自動開啟 HTML 評分報告（另存於 `%LOCALAPPDATA%\vgrade\reports`）
+
+右上角 🌐 選單可切換**繁體中文 / English**：目前的結果與報告會直接換成新語言，不需要重新評分，下次開啟也會記住。
+命令列則使用 `--lang zh` 或 `--lang en`（未指定時依系統語言）。
 
 程式已內建 Yosys；第一次評分需要編譯 Yosys，約 30 秒到 1 分鐘，之後只要幾秒。若電腦有安裝 Icarus Verilog，會自動用於語法檢查。
 
